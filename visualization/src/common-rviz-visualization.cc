@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include <glog/logging.h>
-#include <pcl_ros/point_cloud.h>
 #include <tf/LinearMath/Transform.h>
 #include <tf/transform_broadcaster.h>
 
@@ -269,7 +268,7 @@ void publishCoordinateFrame(
 void publishLines(
     const visualization::LineSegmentVector& line_segments, size_t marker_id,
     const std::string& frame, const std::string& name_space,
-    const std::string& topic) {
+    const std::string& topic, const bool wait_for_subscriber) {
   CHECK(!topic.empty());
   CHECK(ros::isInitialized())
       << "ROS hasn't been initialized. Call "
@@ -325,7 +324,8 @@ void publishLines(
     marker.points[(2u * idx) + 1u] = vertex1;
   }
 
-  RVizVisualizationSink::publish<visualization_msgs::Marker>(topic, marker);
+  RVizVisualizationSink::publish<visualization_msgs::Marker>(
+      topic, marker, wait_for_subscriber);
   ros::spinOnce();
 }
 

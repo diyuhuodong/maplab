@@ -48,7 +48,8 @@ SensorSystem::UniquePtr SensorSystem::createFromYaml(
 void SensorSystem::setSensorExtrinsics(
     const SensorId& sensor_id, const Extrinsics& extrinsics) {
   CHECK(sensor_id.isValid());
-  sensor_id_to_extrinsics_map_.emplace(sensor_id, extrinsics);
+  sensor_id_to_extrinsics_map_.erase(sensor_id);
+  CHECK(sensor_id_to_extrinsics_map_.emplace(sensor_id, extrinsics).second);
 }
 
 const Extrinsics& SensorSystem::getSensorExtrinsics(
@@ -99,6 +100,14 @@ bool SensorSystem::hasSensor(const SensorId& sensor_id) const {
   CHECK(sensor_id.isValid());
   return reference_sensor_id_ == sensor_id ||
          sensor_id_to_extrinsics_map_.count(sensor_id) > 0u;
+}
+
+void SensorSystem::removeSensor(const SensorId& sensor_id) {
+  CHECK(hasSensor(sensor_id));
+  LOG_IF(FATAL, reference_sensor_id_ == sensor_id)
+      << "Cannot remove the reference sensor from the sensor system. "
+      << "In this case, the sensor system itself must be removed.";
+  sensor_id_to_extrinsics_map_.erase(sensor_id);
 }
 
 void SensorSystem::serialize(YAML::Node* yaml_node_ptr) const {
@@ -177,7 +186,8 @@ bool SensorSystem::deserialize(const YAML::Node& sensor_system_node) {
             static_cast<std::string>(kYamlFieldNameSensorId),
             &sensor_id_as_string)) {
       CHECK(!sensor_id_as_string.empty());
-      CHECK(sensor_id.fromHexString(sensor_id_as_string));
+      CHECK(sensor_id.fromHexString(sensor_id_as_string))
+          << sensor_id_as_string;
     } else {
       LOG(ERROR) << "Unable to find the reference sensor ID.";
       return false;

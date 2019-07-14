@@ -6,6 +6,8 @@
 
 #include "sensors/gps-utm.h"
 #include "sensors/gps-wgs.h"
+#include "sensors/imu.h"
+#include "sensors/lidar.h"
 #include "sensors/relative-6dof-pose.h"
 
 namespace vi_map {
@@ -165,6 +167,44 @@ TEST_F(MeasurementsTest, TestAccessorsRelative6DoFPoseMeasurement) {
       rel_6dof_pose_measurement.getMeasurementCovariance(),
       measurement_covariance);
 }
+
+TEST_F(MeasurementsTest, TestAccessorsLidarMeasurement) {
+  // Testing construction with invalid sensor id and invalid timestamp.
+  SensorId sensor_id;
+  int64_t timestamp_nanoseconds = -1;
+  EXPECT_DEATH(LidarMeasurement(sensor_id, timestamp_nanoseconds), "");
+  common::generateId(&sensor_id);
+  EXPECT_DEATH(LidarMeasurement(sensor_id, timestamp_nanoseconds), "");
+
+  timestamp_nanoseconds = getRandomTimestampNanoseconds();
+  LidarMeasurement lidar_measurement(sensor_id, timestamp_nanoseconds);
+  EXPECT_TRUE(lidar_measurement.getPointCloud().empty());
+}
+
+TEST_F(MeasurementsTest, TestAccessorsImuMeasurement) {
+  // Testing construction with invalid sensor id and invalid timestamp.
+  const Eigen::Vector3d I_accel_xyz_m_s2 = Eigen::Vector3d::Random();
+  const Eigen::Vector3d I_gyro_xyz_rad_s = Eigen::Vector3d::Random();
+  SensorId sensor_id;
+  int64_t timestamp_nanoseconds = -1;
+  EXPECT_DEATH(
+      ImuMeasurement(
+          sensor_id, timestamp_nanoseconds, I_accel_xyz_m_s2, I_gyro_xyz_rad_s),
+      "");
+  common::generateId(&sensor_id);
+  EXPECT_DEATH(
+      ImuMeasurement(
+          sensor_id, timestamp_nanoseconds, I_accel_xyz_m_s2, I_gyro_xyz_rad_s),
+      "");
+
+  timestamp_nanoseconds = getRandomTimestampNanoseconds();
+
+  const ImuMeasurement imu_measurement(
+      sensor_id, timestamp_nanoseconds, I_accel_xyz_m_s2, I_gyro_xyz_rad_s);
+  EXPECT_EQ(imu_measurement.get_I_Accel_xyz_m_s2(), I_accel_xyz_m_s2);
+  EXPECT_EQ(imu_measurement.get_I_Gyro_xyz_rad_s(), I_gyro_xyz_rad_s);
+}
+
 }  // namespace vi_map
 
 MAPLAB_UNITTEST_ENTRYPOINT

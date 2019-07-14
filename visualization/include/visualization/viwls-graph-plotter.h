@@ -59,12 +59,13 @@ class ViwlsGraphRvizPlotter {
       const vi_map::VIMap& map, const vi_map::MissionIdList& missions) const;
   void publishEdges(
       const vi_map::VIMap& map, const vi_map::MissionIdList& missions,
-      pose_graph::Edge::EdgeType edge_type,
-      const visualization::Color& color) const;
+      pose_graph::Edge::EdgeType edge_type, const visualization::Color& color,
+      const bool wait_for_subscriber = false) const;
   void publishEdges(
       const vi_map::VIMap& map, const pose_graph::EdgeIdList& edges,
       const visualization::Color& color, unsigned int marker_id,
-      const std::string& topic_extension) const;
+      const std::string& topic_extension,
+      const bool wait_for_subscriber = false) const;
   void publishVertices(
       const vi_map::VIMap& map, const vi_map::MissionIdList& missions) const;
   void publishVertices(
@@ -101,30 +102,27 @@ class ViwlsGraphRvizPlotter {
       const vi_map_helpers::NearCameraPoseSampling& sampling,
       const std::vector<double>& predictions);
 
-  void visualizeNCameraExtrinsics(
-      const vi_map::VIMap& map, const vi_map::MissionId& mission_id) const;
-
-  void visualizeAllOptionalSensorsExtrinsics(const vi_map::VIMap& map);
+  void visualizeSensorExtrinsics(const vi_map::VIMap& map);
 
   void publishReferenceMap() const;
   void setReferenceMap(const vi_map::VIMap& map);
 
+  static const std::string kBaseframeTopic;
+  static const std::string kBoundingBoxTopic;
+  static const std::string kBoxTopic;
   static const std::string kCamPredictionTopic;
   static const std::string kEdgeTopic;
-  static const std::string kBoundingBoxTopic;
-  static const std::string kBaseframeTopic;
-  static const std::string kVertexTopic;
-  static const std::string kVertexPartitioningTopic;
-  static const std::string kBoxTopic;
-  static const std::string kLoopclosureTopic;
+  static const std::string kLandmarkNormalsTopic;
   static const std::string kLandmarkPairsTopic;
   static const std::string kLandmarkTopic;
+  static const std::string kLoopclosureTopic;
   static const std::string kMeshTopic;
-  static const std::string kLandmarkNormalsTopic;
-  static const std::string kSlidingWindowLocalizationResultTopic;
-  static const std::string kUniqueKeyFramesTopic;
   static const std::string kNcamExtrinsicsTopic;
   static const std::string kSensorExtrinsicsTopic;
+  static const std::string kSlidingWindowLocalizationResultTopic;
+  static const std::string kUniqueKeyFramesTopic;
+  static const std::string kVertexPartitioningTopic;
+  static const std::string kVertexTopic;
 
  private:
   visualization::LineSegmentVector reference_edges_line_segments_;

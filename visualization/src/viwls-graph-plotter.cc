@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <string>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -11,9 +12,9 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 #include <maplab-common/parallel-process.h>
+#include <sensors/sensor.h>
 #include <tf/tf.h>
 #include <tf/transform_broadcaster.h>
-#include <sensors/sensor.h>
 #include <vi-map/vertex.h>
 #include <vi-map/viwls-edge.h>
 
@@ -74,34 +75,39 @@ DEFINE_int32(
     "Minimum number of observer missions for a landmark to be "
     "visualized.");
 
+DEFINE_bool(
+    vis_wait_for_traversal_edge_subscriber, false,
+    "If true, the RViz publisher waits for a subscriber before publishing the "
+    "traversal edges of a mission.");
+
 namespace visualization {
+const std::string ViwlsGraphRvizPlotter::kBaseframeTopic =
+    visualization::kViMapTopicHead + "_baseframe";
+const std::string ViwlsGraphRvizPlotter::kBoundingBoxTopic = "bounding_box";
+const std::string ViwlsGraphRvizPlotter::kBoxTopic = "boxes";
 const std::string ViwlsGraphRvizPlotter::kCamPredictionTopic =
     "cam_predictions";
 const std::string ViwlsGraphRvizPlotter::kEdgeTopic =
     visualization::kViMapTopicHead + "_edges";
-const std::string ViwlsGraphRvizPlotter::kBoundingBoxTopic = "bounding_box";
-const std::string ViwlsGraphRvizPlotter::kBaseframeTopic =
-    visualization::kViMapTopicHead + "_baseframe";
-const std::string ViwlsGraphRvizPlotter::kVertexTopic =
-    visualization::kViMapTopicHead + "_vertices";
-const std::string ViwlsGraphRvizPlotter::kVertexPartitioningTopic =
-    "vertex_partitioning";
-const std::string ViwlsGraphRvizPlotter::kBoxTopic = "boxes";
-const std::string ViwlsGraphRvizPlotter::kLoopclosureTopic = "loop_closures";
+const std::string ViwlsGraphRvizPlotter::kLandmarkNormalsTopic =
+    "landmark_normals";
 const std::string ViwlsGraphRvizPlotter::kLandmarkPairsTopic = "landmark_pairs";
 const std::string ViwlsGraphRvizPlotter::kLandmarkTopic =
     visualization::kViMapTopicHead + "_landmarks";
+const std::string ViwlsGraphRvizPlotter::kLoopclosureTopic = "loop_closures";
 const std::string ViwlsGraphRvizPlotter::kMeshTopic = "meshes";
-const std::string ViwlsGraphRvizPlotter::kLandmarkNormalsTopic =
-    "landmark_normals";
-const std::string ViwlsGraphRvizPlotter::kSlidingWindowLocalizationResultTopic =
-    "sliding_window_localization_result";
-const std::string ViwlsGraphRvizPlotter::kUniqueKeyFramesTopic =
-    "unique_key_frames";
 const std::string ViwlsGraphRvizPlotter::kNcamExtrinsicsTopic =
     "ncam_extrinsics";
 const std::string ViwlsGraphRvizPlotter::kSensorExtrinsicsTopic =
     "sensor_extrinsics";
+const std::string ViwlsGraphRvizPlotter::kSlidingWindowLocalizationResultTopic =
+    "sliding_window_localization_result";
+const std::string ViwlsGraphRvizPlotter::kUniqueKeyFramesTopic =
+    "unique_key_frames";
+const std::string ViwlsGraphRvizPlotter::kVertexPartitioningTopic =
+    "vertex_partitioning";
+const std::string ViwlsGraphRvizPlotter::kVertexTopic =
+    visualization::kViMapTopicHead + "_vertices";
 
 ViwlsGraphRvizPlotter::ViwlsGraphRvizPlotter()
     : origin_(
@@ -118,7 +124,7 @@ void ViwlsGraphRvizPlotter::publishEdges(
     vi_map::MissionIdList single_selected_mission = {mission_id};
     publishEdges(
         map, single_selected_mission, map.getGraphTraversalEdgeType(mission_id),
-        color);
+        color, FLAGS_vis_wait_for_traversal_edge_subscriber);
   }
   visualization::Color color_green;
   color_green.red = 25;
@@ -137,8 +143,8 @@ void ViwlsGraphRvizPlotter::publishEdges(
 
 void ViwlsGraphRvizPlotter::publishEdges(
     const vi_map::VIMap& map, const vi_map::MissionIdList& missions,
-    pose_graph::Edge::EdgeType edge_type,
-    const visualization::Color& color_in) const {
+    pose_graph::Edge::EdgeType edge_type, const visualization::Color& color_in,
+    const bool wait_for_subscriber) const {
   visualization::Color color = color_in;
   visualization::LineSegmentVector line_segments;
 
@@ -160,14 +166,14 @@ void ViwlsGraphRvizPlotter::publishEdges(
 
     publishEdges(
         map, edges, color, marker_id,
-        pose_graph::Edge::edgeTypeToString(edge_type));
+        pose_graph::Edge::edgeTypeToString(edge_type), wait_for_subscriber);
   }
 }
 
 void ViwlsGraphRvizPlotter::publishEdges(
     const vi_map::VIMap& map, const pose_graph::EdgeIdList& edges,
     const visualization::Color& color, unsigned int marker_id,
-    const std::string& topic_extension) const {
+    const std::string& topic_extension, const bool wait_for_subscriber) const {
   visualization::LineSegmentVector line_segments;
   visualization::LineSegmentVector lc_transformation_line_segments;
 
@@ -258,7 +264,8 @@ void ViwlsGraphRvizPlotter::publishEdges(
   if (!line_segments.empty()) {
     visualization::publishLines(
         line_segments, marker_id, visualization::kDefaultMapFrame,
-        visualization::kDefaultNamespace, kEdgeTopic + '/' + topic_extension);
+        visualization::kDefaultNamespace, kEdgeTopic + '/' + topic_extension,
+        wait_for_subscriber);
   }
   if (!lc_transformation_line_segments.empty()) {
     visualization::publishLines(
@@ -448,7 +455,7 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
       }
       if (FLAGS_vis_landmarks_min_number_of_observer_missions > 1) {
         vi_map::MissionIdSet observer_missions;
-        map.getLandmarkObserverMissions(landmark.id(), &observer_missions);
+        map.getObserverMissionsForLandmark(landmark.id(), &observer_missions);
         if (observer_missions.size() <
             static_cast<size_t>(
                 FLAGS_vis_landmarks_min_number_of_observer_missions)) {
@@ -464,22 +471,11 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
       sphere.radius = 0.03;
       sphere.alpha = 0.8;
 
-      if (FLAGS_vis_color_by_mission) {
-        const vi_map::VIMission& mission =
-            map.getMission(vertex.getMissionId());
-        const bool is_T_G_M_known =
-            map.getMissionBaseFrame(mission.getBaseFrameId()).is_T_G_M_known();
-        if (FLAGS_vis_color_mission_with_unknown_baseframe_transformation ||
-            is_T_G_M_known) {
-          const size_t index =
-              (vertex.getMissionId().hashToSizeT() * FLAGS_vis_color_salt) %
-              visualization::kNumColors;
-          sphere.color = getPaletteColor(index, palette);
-        } else {
-          sphere.color.red = sphere.color.green = sphere.color.blue =
-              FLAGS_vis_landmark_gray_level;
-        }
-      } else if (FLAGS_vis_color_landmarks_by_number_of_observations) {
+      if (FLAGS_vis_color_landmarks_by_number_of_observations) {
+        LOG_IF(WARNING, FLAGS_vis_color_by_mission)
+            << "Flag -vis_color_by_missions is set to true but is ignored "
+            << "because -vis_color_landmarks_by_number_of_observations is also "
+            << "true and treated with priority.";
         CHECK_GT(FLAGS_vis_landmarks_max_observers, 0);
         sphere.color = getPaletteColor(
             std::min<double>(
@@ -488,6 +484,10 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
                 1.0),
             palette);
       } else if (FLAGS_vis_color_landmarks_by_observer_datasets) {
+        LOG_IF(WARNING, FLAGS_vis_color_by_mission)
+            << "Flag -vis_color_by_missions is set to true but is ignored "
+            << "because -vis_color_landmarks_by_observer_datasets is also true "
+            << "and treated with priority.";
         CHECK_GT(FLAGS_vis_landmarks_max_observers, 0);
         CHECK_GT(FLAGS_vis_landmarks_min_observers, 0);
         const size_t num_observer_missions =
@@ -510,6 +510,10 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
             << "'viz_max_observers' flag (" << FLAGS_vis_landmarks_max_observers
             << "). This likely leads to undesired plotting results.";
       } else if (FLAGS_vis_color_landmarks_by_time) {
+        LOG_IF(WARNING, FLAGS_vis_color_by_mission)
+            << "Flag -vis_color_by_missions is set to true but is ignored "
+            << "because -vis_color_landmarks_by_time is also true and treated "
+            << "with priority.";
         const size_t timestamp_seconds = aslam::time::nanoSecondsToSeconds(
             vertex.getVisualFrame(0).getTimestampNanoseconds());
         const size_t color_index =
@@ -520,6 +524,10 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
                     FLAGS_vis_color_landmarks_by_time_period_seconds));
         sphere.color = getPaletteColor(color_index, palette);
       } else if (FLAGS_vis_color_landmarks_by_first_observer_frame) {
+        LOG_IF(WARNING, FLAGS_vis_color_by_mission)
+            << "Flag -vis_color_by_missions is set to true but is ignored "
+            << "because -vis_color_landmarks_by_first_observer_frame is also "
+            << "true and treated with priority.";
         const vi_map::KeypointIdentifierList& observations =
             landmark.getObservations();
         CHECK(!observations.empty());
@@ -530,12 +538,31 @@ void ViwlsGraphRvizPlotter::appendLandmarksToSphereVector(
                  FLAGS_vis_color_salt)),
             palette);
       } else if (FLAGS_vis_color_landmarks_by_height) {
+        LOG_IF(WARNING, FLAGS_vis_color_by_mission)
+            << "Flag -vis_color_by_missions is set to true but is ignored "
+            << "because -vis_color_landmarks_by_height is also true and "
+            << "treated with priority.";
         const size_t color_index =
             FLAGS_vis_color_salt *
             static_cast<size_t>(
                 (sphere.position(2) + FLAGS_vis_color_by_height_offset_m) /
                 FLAGS_vis_color_by_height_period_m);
         sphere.color = getPaletteColor(color_index, palette);
+      } else if (FLAGS_vis_color_by_mission) {
+        const vi_map::VIMission& mission =
+            map.getMission(vertex.getMissionId());
+        const bool is_T_G_M_known =
+            map.getMissionBaseFrame(mission.getBaseFrameId()).is_T_G_M_known();
+        if (FLAGS_vis_color_mission_with_unknown_baseframe_transformation ||
+            is_T_G_M_known) {
+          const size_t index =
+              (vertex.getMissionId().hashToSizeT() * FLAGS_vis_color_salt) %
+              visualization::kNumColors;
+          sphere.color = getPaletteColor(index, palette);
+        } else {
+          sphere.color.red = sphere.color.green = sphere.color.blue =
+              FLAGS_vis_landmark_gray_level;
+        }
       } else {
         sphere.color = color;
       }
@@ -900,28 +927,7 @@ void ViwlsGraphRvizPlotter::publishCamPredictions(
       visualization::kDefaultNamespace, kCamPredictionTopic);
 }
 
-void ViwlsGraphRvizPlotter::visualizeNCameraExtrinsics(
-    const vi_map::VIMap& map, const vi_map::MissionId& mission_id) const {
-  CHECK(map.hasMission(mission_id));
-  const vi_map::VIMission& mission = map.getMission(mission_id);
-  const aslam::NCamera& ncamera =
-      map.getSensorManager().getNCameraForMission(mission_id);
-  const aslam::Transformation& T_G_I0 =
-      map.getVertex_T_G_I(mission.getRootVertexId());
-  const size_t kImuMarkerId = 0u;
-  visualization::publishCoordinateFrame(
-      T_G_I0, "IMU", kImuMarkerId, kNcamExtrinsicsTopic);
-  const size_t num_cameras = ncamera.getNumCameras();
-  for (size_t camera_idx = 0u; camera_idx < num_cameras; ++camera_idx) {
-    const aslam::Transformation& T_C_I = ncamera.get_T_C_B(camera_idx);
-    const aslam::Transformation T_G_C = T_G_I0 * T_C_I.inverse();
-    visualization::publishCoordinateFrame(
-        T_G_C, 'C' + std::to_string(camera_idx), camera_idx + 1u,
-        kNcamExtrinsicsTopic);
-  }
-}
-
-void ViwlsGraphRvizPlotter::visualizeAllOptionalSensorsExtrinsics(
+void ViwlsGraphRvizPlotter::visualizeSensorExtrinsics(
     const vi_map::VIMap& map) {
   // First, get the transformation between the global frame and the first
   // vertex of some mission.
@@ -935,6 +941,7 @@ void ViwlsGraphRvizPlotter::visualizeAllOptionalSensorsExtrinsics(
       map.getMission(all_mission_ids.front()).getRootVertexId());
 
   const vi_map::SensorManager& sensor_manager = map.getSensorManager();
+  CHECK(sensor_manager.hasSensorSystem());
   vi_map::SensorIdSet all_sensors_ids;
   sensor_manager.getAllSensorIds(&all_sensors_ids);
 
@@ -945,6 +952,11 @@ void ViwlsGraphRvizPlotter::visualizeAllOptionalSensorsExtrinsics(
     CHECK(sensor_id.isValid());
 
     aslam::Transformation T_R_S;
+    if (!sensor_manager.getSensorSystem().hasExtrinsicsForSensor(sensor_id)) {
+      LOG(WARNING) << "No sensor extrinsics for sensor with id "
+                   << sensor_id.hexString();
+      continue;
+    }
     CHECK(sensor_manager.getSensor_T_R_S(sensor_id, &T_R_S));
     const aslam::Transformation T_G_S = T_G_I * T_R_S;
 
@@ -953,6 +965,20 @@ void ViwlsGraphRvizPlotter::visualizeAllOptionalSensorsExtrinsics(
     visualization::publishCoordinateFrame(
         T_G_S, label, marker_id++, kSensorExtrinsicsTopic);
   }
-}
 
+  aslam::NCameraIdSet all_ncamera_ids;
+  sensor_manager.getAllNCameraIds(&all_ncamera_ids);
+  for (const aslam::NCameraId& ncamera_id : all_ncamera_ids) {
+    CHECK(ncamera_id.isValid());
+    const aslam::NCamera& ncamera = sensor_manager.getNCamera(ncamera_id);
+    const size_t num_cameras = ncamera.getNumCameras();
+    for (size_t camera_idx = 0u; camera_idx < num_cameras; ++camera_idx) {
+      const aslam::Transformation& T_C_I = ncamera.get_T_C_B(camera_idx);
+      const aslam::Transformation T_G_C = T_G_I * T_C_I.inverse();
+      visualization::publishCoordinateFrame(
+          T_G_C, ncamera.getLabel() + "_C-" + std::to_string(camera_idx),
+          camera_idx + 1u, kNcamExtrinsicsTopic);
+    }
+  }
+}
 }  // namespace visualization

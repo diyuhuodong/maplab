@@ -1,5 +1,7 @@
 #include "landmark-triangulation/pose-interpolator.h"
 
+#include <limits>
+
 #include <aslam/common/time.h>
 #include <glog/logging.h>
 #include <imu-integrator/imu-integrator.h>
@@ -81,19 +83,14 @@ void PoseInterpolator::buildListOfAllRequiredIMUMeasurements(
         interpolated_measurement.timestamp, interpolated_measurement);
   }
 
-  imu_buffer.lockContainer();
-  const ImuMeasurementBuffer::BufferType& buffered_values =
-      imu_buffer.buffered_values();
-
-  imu_timestamps->resize(Eigen::NoChange, buffered_values.size());
-  imu_data->resize(Eigen::NoChange, buffered_values.size());
+  imu_timestamps->resize(Eigen::NoChange, imu_buffer.size());
+  imu_data->resize(Eigen::NoChange, imu_buffer.size());
   int index = 0;
-  for (const buffer_value_type& value : buffered_values) {
+  for (const buffer_value_type& value : imu_buffer) {
     (*imu_timestamps)(0, index) = value.second.timestamp;
     imu_data->col(index) = value.second.imu_measurement;
     ++index;
   }
-  imu_buffer.unlockContainer();
 }
 
 void PoseInterpolator::computeRequestedPosesInRange(
@@ -165,10 +162,9 @@ void PoseInterpolator::computeRequestedPosesInRange(
       current_state.head<kStateOrientationBlockSize>();
   state_linearization_point_begin.p_M_I =
       current_state.segment<kPositionBlockSize>(kStatePositionOffset);
-  constexpr bool kEmitWarningIfValuesOverwritten = false;
   state_buffer->addValue(
       state_linearization_point_begin.timestamp,
-      state_linearization_point_begin, kEmitWarningIfValuesOverwritten);
+      state_linearization_point_begin);
 
   // Now compute all the integrated values.
   for (int i = 0; i < imu_data.cols() - 1; ++i) {
@@ -209,9 +205,17 @@ void PoseInterpolator::computeRequestedPosesInRange(
 
 void PoseInterpolator::getVertexToTimeStampMap(
     const vi_map::VIMap& map, const vi_map::MissionId& mission_id,
-    std::unordered_map<pose_graph::VertexId, int64_t>* vertex_to_time_map)
-    const {
+    VertexToTimeStampMap* vertex_to_time_map, int64_t* min_timestamp_ns,
+    int64_t* max_timestamp_ns) const {
   CHECK_NOTNULL(vertex_to_time_map)->clear();
+
+  if (min_timestamp_ns != nullptr) {
+    *min_timestamp_ns = std::numeric_limits<int64_t>::max();
+  }
+  if (max_timestamp_ns != nullptr) {
+    *max_timestamp_ns = std::numeric_limits<int64_t>::min();
+  }
+
   // Get the outgoing edge of the vertex and its IMU data.
   pose_graph::VertexIdList all_mission_vertices;
   map.getAllVertexIdsInMissionAlongGraph(mission_id, &all_mission_vertices);
@@ -238,6 +242,12 @@ void PoseInterpolator::getVertexToTimeStampMap(
         imu_edge.getImuTimestamps();
     if (imu_timestamps.cols() > 0) {
       (*vertex_to_time_map)[vertex_id] = imu_timestamps(0, 0);
+      if (min_timestamp_ns != nullptr) {
+        *min_timestamp_ns = std::min(*min_timestamp_ns, imu_timestamps(0, 0));
+      }
+      if (max_timestamp_ns != nullptr) {
+        *max_timestamp_ns = std::max(*max_timestamp_ns, imu_timestamps(0, 0));
+      }
     }
   }
 }

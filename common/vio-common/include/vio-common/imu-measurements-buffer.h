@@ -28,7 +28,6 @@ class ImuMeasurementBuffer {
   MAPLAB_POINTER_TYPEDEFS(ImuMeasurementBuffer);
   EIGEN_MAKE_ALIGNED_OPERATOR_NEW
 
-
   enum class QueryResult {
     /// Query was successful and the data is available.
     kDataAvailable,
@@ -80,7 +79,7 @@ class ImuMeasurementBuffer {
   QueryResult getImuDataInterpolatedBorders(
       int64_t timestamp_from, int64_t timestamp_to,
       Eigen::Matrix<int64_t, 1, Eigen::Dynamic>* imu_timestamps,
-      Eigen::Matrix<double, 6, Eigen::Dynamic>* imu_measurements);
+      Eigen::Matrix<double, 6, Eigen::Dynamic>* imu_measurements) const;
 
   /// Try to pop the requested IMU measurements for the duration of
   /// wait_timeout_nanoseconds.
@@ -91,12 +90,7 @@ class ImuMeasurementBuffer {
       int64_t timestamp_ns_from, int64_t timestamp_ns_to,
       int64_t wait_timeout_nanoseconds,
       Eigen::Matrix<int64_t, 1, Eigen::Dynamic>* imu_timestamps,
-      Eigen::Matrix<double, 6, Eigen::Dynamic>* imu_measurements);
-
-  /// Linear interpolation between two imu measurements.
-  static void linearInterpolate(
-      int64_t x0, const vio::ImuData& y0, int64_t x1, const vio::ImuData& y1,
-      int64_t x, vio::ImuData* y);
+      Eigen::Matrix<double, 6, Eigen::Dynamic>* imu_measurements) const;
 
  private:
   /// Is data available up to this timestamp? Note this function does not lock
@@ -105,13 +99,18 @@ class ImuMeasurementBuffer {
   QueryResult isDataAvailableUpToImpl(
       int64_t timestamp_ns_from, int64_t timestamp_ns_to) const;
 
+  QueryResult getImuDataInterpolatedBordersImpl(
+      int64_t timestamp_ns_from, int64_t timestamp_ns_to,
+      Eigen::Matrix<int64_t, 1, Eigen::Dynamic>* imu_timestamps,
+      Eigen::Matrix<double, 6, Eigen::Dynamic>* imu_measurements) const;
+
   typedef std::pair<int64_t, vio::ImuMeasurement> BufferElement;
   typedef Eigen::aligned_allocator<BufferElement> BufferAllocator;
   typedef common::TemporalBuffer<vio::ImuMeasurement, BufferAllocator> Buffer;
 
   Buffer buffer_;
   mutable std::mutex m_buffer_;
-  std::condition_variable cv_new_measurement_;
+  mutable std::condition_variable cv_new_measurement_;
   std::atomic<bool> shutdown_;
 };
 }  // namespace vio_common

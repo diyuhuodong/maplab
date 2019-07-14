@@ -1,13 +1,12 @@
 #ifndef MAPLAB_COMMON_TEMPORAL_BUFFER_INL_H_
 #define MAPLAB_COMMON_TEMPORAL_BUFFER_INL_H_
 
-#include <algorithm>
-#include <atomic>
 #include <limits>
-#include <map>
-#include <mutex>
+#include <utility>
 
 #include <glog/logging.h>
+
+#include "maplab-common/interpolation-helpers.h"
 
 namespace common {
 
@@ -23,47 +22,47 @@ TemporalBuffer<ValueType, AllocatorType>::TemporalBuffer(
 template <typename ValueType, typename AllocatorType>
 TemporalBuffer<ValueType, AllocatorType>::TemporalBuffer(
     const TemporalBuffer<ValueType, AllocatorType>& other) {
-  // Lock both mutexes without deadlock.
-  std::lock(mutex_, other.mutex_);
-
   values_ = other.values_;
   buffer_length_nanoseconds_ = other.buffer_length_nanoseconds_;
-
-  mutex_.unlock();
-  other.mutex_.unlock();
 }
 
 template <typename ValueType, typename AllocatorType>
-void TemporalBuffer<ValueType, AllocatorType>::addValue(
+bool TemporalBuffer<ValueType, AllocatorType>::addValue(
     const int64_t timestamp, const ValueType& value) {
-  constexpr bool kEmitWarningOnValueOverwrite = false;
-  addValue(timestamp, value, kEmitWarningOnValueOverwrite);
-}
+  std::pair<typename BufferType::iterator, bool> it_value_inserted_pair =
+      values_.emplace(timestamp, value);
 
-template <typename ValueType, typename AllocatorType>
-void TemporalBuffer<ValueType, AllocatorType>::addValue(
-    const int64_t timestamp, const ValueType& value,
-    const bool emit_warning_on_value_overwrite) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-  const bool value_overwritten = values_.emplace(timestamp, value).second;
-  LOG_IF(WARNING, value_overwritten && emit_warning_on_value_overwrite)
-      << "A value in temporal buffer at time " << timestamp
-      << " already exists!";
+  // Replace value at existing timestamp.
+  if (!it_value_inserted_pair.second) {
+    CHECK(it_value_inserted_pair.first != values_.end());
+    it_value_inserted_pair.first->second = value;
+  }
+
   removeOutdatedItems();
+  return it_value_inserted_pair.second;
 }
 
 template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::deleteValueAtTime(
     int64_t timestamp_ns) {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   return values_.erase(timestamp_ns) > 0u;
+}
+
+template <typename ValueType, typename AllocatorType>
+bool TemporalBuffer<ValueType, AllocatorType>::getOldestTime(
+    int64_t* timestamp_nanoseconds) const {
+  CHECK_NOTNULL(timestamp_nanoseconds);
+  if (empty()) {
+    return false;
+  }
+  *timestamp_nanoseconds = values_.begin()->first;
+  return true;
 }
 
 template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getOldestValue(
     ValueType* value) const {
   CHECK_NOTNULL(value);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (empty()) {
     return false;
   }
@@ -72,10 +71,20 @@ bool TemporalBuffer<ValueType, AllocatorType>::getOldestValue(
 }
 
 template <typename ValueType, typename AllocatorType>
+bool TemporalBuffer<ValueType, AllocatorType>::getNewestTime(
+    int64_t* timestamp_nanoseconds) const {
+  CHECK_NOTNULL(timestamp_nanoseconds);
+  if (empty()) {
+    return false;
+  }
+  *timestamp_nanoseconds = values_.rbegin()->first;
+  return true;
+}
+
+template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getNewestValue(
     ValueType* value) const {
   CHECK_NOTNULL(value);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (empty()) {
     return false;
   }
@@ -87,7 +96,6 @@ template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getValueAtTime(
     int64_t timestamp, ValueType* value) const {
   CHECK_NOTNULL(value);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   typename BufferType::const_iterator it = values_.find(timestamp);
   if (it != values_.end()) {
     *value = it->second;
@@ -106,13 +114,14 @@ bool TemporalBuffer<ValueType, AllocatorType>::getNearestValueToTime(
 
 template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getValueAtOrBeforeTime(
-    int64_t timestamp, int64_t* timestamp_of_value, ValueType* value) const {
+    const int64_t timestamp, int64_t* timestamp_of_value,
+    ValueType* value) const {
   CHECK_NOTNULL(timestamp_of_value);
   CHECK_NOTNULL(value);
 
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   typename BufferType::const_iterator it_lower_bound;
-  bool has_exact_match = getIteratorAtTimeOrEarlier(timestamp, &it_lower_bound);
+  const bool has_exact_match =
+      getIteratorAtTimeOrEarlier(timestamp, &it_lower_bound);
 
   if (!has_exact_match) {
     if (it_lower_bound == values_.begin()) {
@@ -129,11 +138,11 @@ bool TemporalBuffer<ValueType, AllocatorType>::getValueAtOrBeforeTime(
 
 template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getValueAtOrAfterTime(
-    int64_t timestamp, int64_t* timestamp_of_value, ValueType* value) const {
+    const int64_t timestamp, int64_t* timestamp_of_value,
+    ValueType* value) const {
   CHECK_NOTNULL(timestamp_of_value);
   CHECK_NOTNULL(value);
 
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   typename BufferType::const_iterator it_lower_bound;
   bool has_exact_match = getIteratorAtTimeOrEarlier(timestamp, &it_lower_bound);
 
@@ -151,10 +160,9 @@ bool TemporalBuffer<ValueType, AllocatorType>::getValueAtOrAfterTime(
 
 template <typename ValueType, typename AllocatorType>
 bool TemporalBuffer<ValueType, AllocatorType>::getIteratorAtTimeOrEarlier(
-    int64_t timestamp,
+    const int64_t timestamp,
     typename BufferType::const_iterator* it_lower_bound) const {
   CHECK_NOTNULL(it_lower_bound);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
 
   // Return false if no values in buffer.
   if (empty()) {
@@ -172,30 +180,70 @@ bool TemporalBuffer<ValueType, AllocatorType>::getIteratorAtTimeOrEarlier(
   return false;
 }
 
+// Return false if the pose is not between two values.
+template <typename ValueType, typename AllocatorType>
+bool TemporalBuffer<ValueType, AllocatorType>::interpolateAt(
+    const int64_t timestamp_ns, ValueType* output) const {
+  CHECK_NOTNULL(output);
+
+  int64_t timestamp_before;
+  ValueType value_before;
+  if (!getValueAtOrBeforeTime(timestamp_ns, &timestamp_before, &value_before)) {
+    return false;
+  }
+
+  int64_t timestamp_after;
+  ValueType value_after;
+  if (!getValueAtOrAfterTime(timestamp_ns, &timestamp_after, &value_after)) {
+    return false;
+  }
+
+  if (timestamp_after == timestamp_before) {
+    CHECK_EQ(timestamp_ns, timestamp_after);
+    *output = value_before;
+    return true;
+  }
+
+  CHECK_LT(timestamp_before, timestamp_ns);
+  CHECK_GT(timestamp_after, timestamp_ns);
+
+  LinearInterpolationFunctor<int64_t, ValueType>()(
+      timestamp_before, value_before, timestamp_after, value_after,
+      timestamp_ns, output);
+  return true;
+}
+
 template <typename ValueType, typename AllocatorType>
 template <typename ValueContainerType>
-bool TemporalBuffer<ValueType, AllocatorType>::getValuesBetweenTimes(
-    int64_t timestamp_lower_ns, int64_t timestamp_higher_ns,
+void TemporalBuffer<ValueType, AllocatorType>::getValuesBetweenTimes(
+    const int64_t timestamp_lower_ns, const int64_t timestamp_higher_ns,
     ValueContainerType* values) const {
   CHECK_NOTNULL(values)->clear();
   CHECK_GT(timestamp_higher_ns, timestamp_lower_ns);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
-
-  // Early exit if there are too few items.
-  if (size() < 3u) {
-    return false;
-  }
-
-  const int64_t oldest_timestamp = values_.begin()->first;
-  const int64_t latest_timestamp = values_.rbegin()->first;
-  if (oldest_timestamp > timestamp_lower_ns ||
-      timestamp_higher_ns > latest_timestamp) {
-    return false;
-  }
 
   typename BufferType::const_iterator it =
       values_.lower_bound(timestamp_lower_ns);
   for (; it != values_.end() && it->first < timestamp_higher_ns; ++it) {
+    // lower_bound includes the border so we need to skip them when there are
+    // perfect matches.
+    if (it->first == timestamp_lower_ns) {
+      continue;
+    }
+    values->emplace_back(it->second);
+  }
+}
+
+template <typename ValueType, typename AllocatorType>
+template <typename ValueContainerType>
+void TemporalBuffer<ValueType, AllocatorType>::
+    getValuesFromExcludingToIncluding(
+        const int64_t timestamp_lower_ns, const int64_t timestamp_higher_ns,
+        ValueContainerType* values) const {
+  CHECK_NOTNULL(values)->clear();
+  CHECK_GT(timestamp_higher_ns, timestamp_lower_ns);
+  typename BufferType::const_iterator it =
+      values_.lower_bound(timestamp_lower_ns);
+  for (; it != values_.end() && it->first <= timestamp_higher_ns; ++it) {
     CHECK(it != values_.end());
 
     // lower_bound includes the border so we need to skip them when there are
@@ -205,7 +253,6 @@ bool TemporalBuffer<ValueType, AllocatorType>::getValuesBetweenTimes(
     }
     values->emplace_back(it->second);
   }
-  return true;
 }
 
 template <typename ValueType, typename AllocatorType>
@@ -214,7 +261,6 @@ bool TemporalBuffer<ValueType, AllocatorType>::getNearestValueToTime(
     int64_t* timestamp_at_value_ns) const {
   CHECK_NOTNULL(timestamp_at_value_ns);
   CHECK_NOTNULL(value);
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
 
   if (empty()) {
     return false;
@@ -295,7 +341,6 @@ bool TemporalBuffer<ValueType, AllocatorType>::getNearestValueToTime(
 
 template <typename ValueType, typename AllocatorType>
 void TemporalBuffer<ValueType, AllocatorType>::removeOutdatedItems() {
-  std::lock_guard<std::recursive_mutex> lock(mutex_);
   if (empty() || buffer_length_nanoseconds_ <= 0) {
     return;
   }
@@ -312,13 +357,6 @@ void TemporalBuffer<ValueType, AllocatorType>::removeOutdatedItems() {
     CHECK(it != values_.begin());
     values_.erase(values_.begin(), it);
   }
-}
-
-template <typename ValueType, typename AllocatorType>
-void TemporalBuffer<ValueType, AllocatorType>::insert(
-    const TemporalBuffer& other) {
-  values_.insert(
-      other.buffered_values().begin(), other.buffered_values().end());
 }
 
 }  // namespace common

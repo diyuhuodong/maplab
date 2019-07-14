@@ -76,14 +76,16 @@ void VIMapQueries::getAllWellConstrainedLandmarkIds(
   CHECK_NOTNULL(landmark_ids)->clear();
   map_.getAllLandmarkIds(landmark_ids);
 
-  for (vi_map::LandmarkIdList::iterator it = landmark_ids->begin();
-       it != landmark_ids->end();) {
-    if (!vi_map::isLandmarkWellConstrained(map_, map_.getLandmark(*it))) {
-      it = landmark_ids->erase(it);
-    } else {
-      ++it;
+  vi_map::LandmarkIdList good_landmark_ids;
+  good_landmark_ids.reserve(landmark_ids->size());
+
+  for (const vi_map::LandmarkId& landmark_id : *landmark_ids) {
+    if (vi_map::isLandmarkWellConstrained(
+            map_, map_.getLandmark(landmark_id))) {
+      good_landmark_ids.emplace_back(landmark_id);
     }
   }
+  landmark_ids->swap(good_landmark_ids);
 }
 
 void VIMapQueries::getAllNotWellConstrainedLandmarkIds(
@@ -222,7 +224,7 @@ void VIMapQueries::getCommonObserversForLandmarks(
   for (const vi_map::LandmarkId& landmark : landmarks) {
     VLOG(4) << "Processing landmark " << landmark;
     pose_graph::VertexIdSet observer_ids_set;
-    map_.getLandmarkObserverVertices(landmark, &observer_ids_set);
+    map_.getObserverVerticesForLandmark(landmark, &observer_ids_set);
     for (const pose_graph::VertexId& observer_id : observer_ids_set) {
       ++vertex_is_observer_count[observer_id];
     }
@@ -238,7 +240,7 @@ void VIMapQueries::getCommonObserversForLandmarks(
 bool VIMapQueries::isLandmarkObservedByMultipleMissions(
     const vi_map::LandmarkId& landmark_id) const {
   vi_map::MissionIdSet observing_missions;
-  map_.getLandmarkObserverMissions(landmark_id, &observing_missions);
+  map_.getObserverMissionsForLandmark(landmark_id, &observing_missions);
   return observing_missions.size() > 1u;
 }
 

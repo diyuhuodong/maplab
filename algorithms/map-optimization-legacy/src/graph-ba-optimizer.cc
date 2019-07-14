@@ -155,8 +155,14 @@ void GraphBaOptimizer::copyDataFromMap() {
        mission_base_frame_ids) {
     const vi_map::MissionBaseFrame& baseframe =
         const_map_.getMissionBaseFrame(baseframe_id);
-    baseframe_poses_.col(base_frame_idx)
-        << baseframe.get_q_G_M().inverse().coeffs(),
+    Eigen::Quaterniond q_G_M = baseframe.get_q_G_M().inverse();
+
+    if (q_G_M.w() < 0.0) {
+      q_G_M.coeffs() = -q_G_M.coeffs();
+    }
+    CHECK_GE(q_G_M.w(), 0.0);
+
+    baseframe_poses_.col(base_frame_idx) << q_G_M.coeffs(),
         baseframe.get_p_G_M();
 
     baseframe_id_to_baseframe_idx_.emplace(baseframe_id, base_frame_idx);
@@ -183,8 +189,15 @@ void GraphBaOptimizer::copyDataFromMap() {
     aslam::Transformation T_R_S;
     if (sensor_manager.getSensor_T_R_S(sensor_id, &T_R_S)) {
       const aslam::Transformation T_S_I = T_R_S.inverse();
-      sensor_extrinsics_.col(sensor_extrinsics_col_idx)
-          << T_S_I.getRotation().toImplementation().inverse().coeffs(),
+
+      Eigen::Quaterniond q_S_I =
+          T_S_I.getRotation().toImplementation().inverse();
+      if (q_S_I.w() < 0.0) {
+        q_S_I.coeffs() = -q_S_I.coeffs();
+      }
+      CHECK_GE(q_S_I.w(), 0.0);
+
+      sensor_extrinsics_.col(sensor_extrinsics_col_idx) << q_S_I.coeffs(),
           T_S_I.getPosition();
 
       CHECK(
@@ -193,8 +206,12 @@ void GraphBaOptimizer::copyDataFromMap() {
               .second);
       ++sensor_extrinsics_col_idx;
     } else {
-      LOG(WARNING) << "Unable to retrieve the sensor extrinsics of sensor "
-                   << sensor_id.hexString();
+      const bool is_reference_sensor =
+          sensor_manager.hasSensorSystem() &&
+          sensor_manager.getSensorSystem().getReferenceSensorId() == sensor_id;
+      LOG_IF(WARNING, !is_reference_sensor) << "Unable to retrieve the sensor "
+                                            << "extrinsics of sensor "
+                                            << sensor_id.hexString();
     }
   }
 
@@ -217,9 +234,14 @@ void GraphBaOptimizer::copyDataFromMap() {
          ++camera_idx) {
       const aslam::Transformation& T_C_I = ncamera.get_T_C_B(camera_idx);
 
-      T_C_I_JPL_.col(T_C_I_column_index)
-          << T_C_I.getRotation().toImplementation().inverse().coeffs(),
-          T_C_I.getPosition();
+      Eigen::Quaterniond q_C_I =
+          T_C_I.getRotation().toImplementation().inverse();
+      if (q_C_I.w() < 0.0) {
+        q_C_I.coeffs() = -q_C_I.coeffs();
+      }
+      CHECK_GE(q_C_I.w(), 0.0);
+
+      T_C_I_JPL_.col(T_C_I_column_index) << q_C_I.coeffs(), T_C_I.getPosition();
 
       const aslam::CameraId& camera_id = ncamera.getCamera(camera_idx).getId();
       CHECK(camera_id.isValid());
@@ -564,7 +586,7 @@ void GraphBaOptimizer::visualBaOptimizationWithCallback(
   bool kFixExtrinsicsTranslation = true;
   bool kFixLandmarkPosition = false;
 
-  if (options.remove_behind_camera_landmarks) {
+  if (options.remove_behind_camera_landmarks_before) {
     removeLandmarksBehindCamera();
   }
 
@@ -607,7 +629,7 @@ void GraphBaOptimizer::visualInertialBaOptimizationWithCallback(
     std::function<void(const vi_map::VIMap&)> callback,
     ceres::Solver::Summary* summary) {
   CHECK_NOTNULL(summary);
-  if (options.remove_behind_camera_landmarks) {
+  if (options.remove_behind_camera_landmarks_before) {
     removeLandmarksBehindCamera();
   }
 
@@ -733,8 +755,6 @@ void GraphBaOptimizer::visualInertialBaOptimizationWithCallback(
 
   ceres::Solver::Options solver_options = getDefaultSolverOptions();
   solver_options.max_num_iterations = options.num_iterations;
-  solver_options.gradient_tolerance = 10.0;
-  solver_options.function_tolerance = 1e-4;
   static constexpr bool kCopyDataFromSolverBackToMap = true;
 
   if (options.visual_outlier_rejection) {
@@ -775,8 +795,10 @@ void GraphBaOptimizer::visualInertialBaOptimizationWithCallback(
         summary);
   }
 
-  // This function will flag all landmarks behind the camera as bad.
-  removeLandmarksBehindCamera();
+  if (options.remove_behind_camera_landmarks_after) {
+    // This function will flag all landmarks behind the camera as bad.
+    removeLandmarksBehindCamera();
+  }
 }
 
 void GraphBaOptimizer::alignMissions(
@@ -787,7 +809,9 @@ void GraphBaOptimizer::alignMissions(
   CHECK(!baseframes_to_fix.empty())
       << "At least one baseframe has to be fixed.";
 
-  vi_map_helpers::evaluateLandmarkQuality(&map_);
+  vi_map::MissionIdList mission_ids(missions.begin(), missions.end());
+  CHECK_EQ(mission_ids.size(), missions.size());
+  vi_map_helpers::evaluateLandmarkQuality(mission_ids, &map_);
   LOG(INFO) << "Running align on the following missions:";
   for (const vi_map::MissionId& mission_id : missions) {
     LOG(INFO) << "\t" << mission_id;
@@ -1253,7 +1277,7 @@ void GraphBaOptimizer::addInertialResidualBlocks(
                                     Eigen::Matrix<double, 6, 6>>::iterator,
                 bool>
           it_success = imu_edge_covariances->insert(
-              std::make_pair(edge_id, Eigen::Matrix<double, 6, 6>()));
+              std::make_pair(edge_id, Eigen::Matrix<double, 6, 6>::Zero()));
       CHECK(it_success.second);
       Eigen::Matrix<double, 6, 6>& A_T_B_imu_covariance =
           it_success.first->second;
@@ -1520,18 +1544,24 @@ void GraphBaOptimizer::addLoopClosureEdges(
           loop_closure_edge.getSwitchVariableVariance() *
           loop_closure_edge.getSwitchVariableVariance();
 
-      using ceres_error_terms::SwitchPriorErrorTermLegacy;
+      using ceres_error_terms::SwitchPriorErrorTerm;
       std::shared_ptr<ceres::CostFunction> switch_variable_cost(
           new ceres::AutoDiffCostFunction<
-              SwitchPriorErrorTermLegacy,
-              SwitchPriorErrorTermLegacy::residualBlockSize,
-              SwitchPriorErrorTermLegacy::switchVariableBlockSize>(
-              new SwitchPriorErrorTermLegacy(
+              SwitchPriorErrorTerm, SwitchPriorErrorTerm::residualBlockSize,
+              SwitchPriorErrorTerm::switchVariableBlockSize>(
+              new SwitchPriorErrorTerm(
                   kSwitchPrior, kSwitchVariableVarianceSq)));
       problem_information_.addResidualBlock(
           ceres_error_terms::ResidualType::kSwitchVariable,
           switch_variable_cost, NULL,
           {loop_closure_edge.getSwitchVariableMutable()});
+      constexpr double kSwitchVariableMinValue = 0.0;
+      constexpr double kSwitchVariableMaxValue = 1.0;
+      constexpr int kSwitchVariableIndexIntoParameterBlock = 0;
+      problem_information_.setParameterBlockBounds(
+          kSwitchVariableIndexIntoParameterBlock, kSwitchVariableMinValue,
+          kSwitchVariableMaxValue,
+          loop_closure_edge.getSwitchVariableMutable());
     }
 
     ++num_residual_blocks_added;
@@ -1778,7 +1808,7 @@ bool GraphBaOptimizer::addVisualResidualBlockOfKeypoint(
 
   if (min_num_observer_missions > 0u) {
     vi_map::MissionIdSet observer_missions;
-    map_.getLandmarkObserverMissions(landmark_id, &observer_missions);
+    map_.getObserverMissionsForLandmark(landmark_id, &observer_missions);
     if (observer_missions.size() < min_num_observer_missions) {
       return false;
     }

@@ -40,6 +40,7 @@ class SensorSystem final : common::YamlFileSerializable {
   bool hasExtrinsicsForSensor(const SensorId& sensor_id) const {
     return hasSensor(sensor_id) && reference_sensor_id_ != sensor_id;
   }
+  void removeSensor(const SensorId& sensor_id);
 
   const SensorSystemId& getId() const {
     CHECK(id_.isValid());
@@ -52,6 +53,11 @@ class SensorSystem final : common::YamlFileSerializable {
     return id_ == other.id_ &&
            reference_sensor_id_ == other.reference_sensor_id_ &&
            sensor_id_to_extrinsics_map_ == other.sensor_id_to_extrinsics_map_;
+  }
+
+  const SensorId& getReferenceSensorId() const {
+    CHECK(reference_sensor_id_.isValid());
+    return reference_sensor_id_;
   }
 
  private:
