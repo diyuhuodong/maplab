@@ -1,0 +1,11 @@
+sensor_type: IMU
+hardware_id: /camera/imu
+id: 6a12981d8906c79b15f6bf236aec8ad8
+sigmas:
+  gyro_noise_density: 0.0007309
+  gyro_bias_random_walk_noise_density: 0.01413
+  acc_noise_density: 0.0188
+  acc_bias_random_walk_noise_density: 0.012589
+saturation_accel_max_mps2: 150.0
+saturation_gyro_max_radps: 7.5
+gravity_magnitude_mps2: 9.808083883386614
